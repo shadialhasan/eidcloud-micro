@@ -1,0 +1,42 @@
+{
+  "name": "eidcloud/micro",
+  "description": "Sub-100KB zero-dependency high-performance PHP micro-framework for microservices and CLI APIs",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Eng. MHD. Shadi AL-Hasan",
+      "email": "mhd.shadi.alhasan@gmail.com",
+      "homepage": "https://github.com/shadialhasan",
+      "role": "Lead Architect & Author"
+    }
+  ],
+  "require": {
+    "php": ">=8.2.0"
+  },
+  "require-dev": {},
+  "autoload": {
+    "psr-4": {
+      "EidCloud\\Micro\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "EidCloud\\Micro\\Tests\\": "tests/"
+    }
+  },
+  "bin": [
+    "bin/eidcloud-micro"
+  ],
+  "scripts": {
+    "test": "php tests/run_tests.php",
+    "serve": "php bin/eidcloud-micro serve",
+    "benchmark": "php bin/eidcloud-micro benchmark"
+  },
+  "config": {
+    "sort-packages": true,
+    "optimize-autoloader": true
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

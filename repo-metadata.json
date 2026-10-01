@@ -1,0 +1,12 @@
+{
+  "description": "Sub-100KB zero-dependency high-performance PHP micro-framework for microservices and CLI APIs",
+  "topics": [
+    "eidcloud",
+    "php-framework",
+    "microframework",
+    "zero-dependency",
+    "high-performance",
+    "router",
+    "rest-api"
+  ]
+}

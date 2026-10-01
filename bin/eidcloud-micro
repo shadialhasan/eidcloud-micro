@@ -1,0 +1,338 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * eidcloud-micro CLI Tool
+ *
+ * Lightweight development server & benchmark runner.
+ */
+
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "This command can only be executed from the CLI.\n");
+    exit(1);
+}
+
+$autoloadPath = __DIR__ . '/../src/autoload.php';
+if (file_exists($autoloadPath)) {
+    require_once $autoloadPath;
+}
+
+const VERSION = '1.0.0';
+
+// ANSI terminal color helpers
+function color(string $text, string $colorCode): string
+{
+    // Check if terminal supports ANSI colors
+    if (DIRECTORY_SEPARATOR === '\\' && getenv('ANSICON') === false && getenv('WT_SESSION') === null) {
+        // Windows CMD fallback: still show cleanly
+        return $text;
+    }
+    return "\033[{$colorCode}m{$text}\033[0m";
+}
+
+function bold(string $text): string
+{
+    return color($text, '1');
+}
+
+function green(string $text): string
+{
+    return color($text, '32');
+}
+
+function cyan(string $text): string
+{
+    return color($text, '36');
+}
+
+function yellow(string $text): string
+{
+    return color($text, '33');
+}
+
+function red(string $text): string
+{
+    return color($text, '31');
+}
+
+function gray(string $text): string
+{
+    return color($text, '90');
+}
+
+/**
+ * Parse CLI arguments into command and options.
+ *
+ * @param list<string> $argv
+ * @return array{command: string, options: array<string, string|bool>}
+ */
+function parseArgs(array $argv): array
+{
+    array_shift($argv); // Remove script name
+
+    $command = 'help';
+    $options = [];
+
+    foreach ($argv as $arg) {
+        if ($arg === '-h' || $arg === '--help') {
+            return ['command' => 'help', 'options' => []];
+        }
+        if ($arg === '-v' || $arg === '--version') {
+            return ['command' => 'version', 'options' => []];
+        }
+
+        if (str_starts_with($arg, '--')) {
+            $pair = substr($arg, 2);
+            if (str_contains($pair, '=')) {
+                [$key, $val] = explode('=', $pair, 2);
+                $options[$key] = $val;
+            } else {
+                $options[$pair] = true;
+            }
+        } elseif (str_starts_with($arg, '-')) {
+            $options[substr($arg, 1)] = true;
+        } else {
+            if ($command === 'help') {
+                $command = $arg;
+            }
+        }
+    }
+
+    return ['command' => $command, 'options' => $options];
+}
+
+function printHeader(): void
+{
+    echo cyan("⚡ eidcloud-micro") . " " . green("v" . VERSION) . gray(" (PHP " . PHP_VERSION . ")") . "\n";
+    echo gray("Sub-100KB Zero-Dependency PHP Micro-Framework\n\n");
+}
+
+function printHelp(): void
+{
+    printHeader();
+    echo bold("USAGE:") . "\n";
+    echo "  php bin/eidcloud-micro <command> [options]\n\n";
+
+    echo bold("AVAILABLE COMMANDS:") . "\n";
+    echo "  " . green("serve") . "       Start the built-in development HTTP server\n";
+    echo "  " . green("benchmark") . "   Run high-concurrency performance benchmark against an endpoint\n";
+    echo "  " . green("version") . "     Display version information\n";
+    echo "  " . green("help") . "        Show this help manual\n\n";
+
+    echo bold("SERVE OPTIONS:") . "\n";
+    echo "  " . yellow("--host=<ip>") . "       Host IP address to bind to " . gray("(default: 127.0.0.1)") . "\n";
+    echo "  " . yellow("--port=<port>") . "     TCP port to listen on " . gray("(default: 8080)") . "\n";
+    echo "  " . yellow("--public=<path>") . "   Public document root directory " . gray("(default: public)") . "\n\n";
+
+    echo bold("BENCHMARK OPTIONS:") . "\n";
+    echo "  " . yellow("--url=<url>") . "         Target URL " . gray("(default: http://127.0.0.1:8080/health)") . "\n";
+    echo "  " . yellow("--requests=<n>") . "     Total number of HTTP requests to execute " . gray("(default: 1000)") . "\n";
+    echo "  " . yellow("--concurrency=<n>") . "  Number of concurrent HTTP connections " . gray("(default: 10)") . "\n";
+    echo "  " . yellow("--method=<METHOD>") . "  HTTP method " . gray("(default: GET)") . "\n\n";
+
+    echo bold("EXAMPLES:") . "\n";
+    echo "  php bin/eidcloud-micro serve --port=8080\n";
+    echo "  php bin/eidcloud-micro benchmark --requests=1000 --concurrency=20\n";
+    echo "  php bin/eidcloud-micro benchmark --url=http://127.0.0.1:8080/api/users --requests=500\n";
+}
+
+function runServe(array $options): int
+{
+    printHeader();
+
+    $host = (string) ($options['host'] ?? '127.0.0.1');
+    $port = (string) ($options['port'] ?? '8080');
+    $publicDir = (string) ($options['public'] ?? 'public');
+
+    $targetDir = realpath(__DIR__ . '/../' . $publicDir);
+    if ($targetDir === false) {
+        $targetDir = realpath($publicDir);
+    }
+
+    if ($targetDir === false || !is_dir($targetDir)) {
+        fwrite(STDERR, red("Error: Public directory '{$publicDir}' not found.\n"));
+        return 1;
+    }
+
+    $address = "{$host}:{$port}";
+    echo green("✔") . " Server starting at " . bold(cyan("http://{$address}")) . "\n";
+    echo gray("  Document root : ") . $targetDir . "\n";
+    echo gray("  Router script : ") . $targetDir . DIRECTORY_SEPARATOR . "index.php\n";
+    echo yellow("  Press Ctrl+C to stop the server\n\n");
+
+    $cmd = sprintf(
+        '%s -S %s -t %s',
+        escapeshellcmd(PHP_BINARY),
+        escapeshellarg($address),
+        escapeshellarg($targetDir)
+    );
+
+    passthru($cmd, $exitCode);
+    return $exitCode;
+}
+
+function runBenchmark(array $options): int
+{
+    printHeader();
+
+    $url = (string) ($options['url'] ?? 'http://127.0.0.1:8080/health');
+    $totalRequests = (int) ($options['requests'] ?? 1000);
+    $concurrency = (int) ($options['concurrency'] ?? 10);
+    $method = strtoupper((string) ($options['method'] ?? 'GET'));
+
+    if ($totalRequests <= 0) {
+        $totalRequests = 1000;
+    }
+    if ($concurrency <= 0) {
+        $concurrency = 10;
+    }
+
+    echo bold("Target URL   : ") . cyan($url) . "\n";
+    echo bold("Method       : ") . yellow($method) . "\n";
+    echo bold("Requests     : ") . number_format($totalRequests) . "\n";
+    echo bold("Concurrency  : ") . $concurrency . "\n";
+    echo gray("Warming up and initiating concurrent benchmark runner...\n\n");
+
+    if (!extension_loaded('curl')) {
+        fwrite(STDERR, red("Error: ext-curl is required for high-concurrency benchmark.\n"));
+        return 1;
+    }
+
+    $latencies = [];
+    $statusCodes = [];
+    $totalBytes = 0;
+    $errors = 0;
+
+    $multiHandle = curl_multi_init();
+    $activeHandles = [];
+    $requestsDispatched = 0;
+
+    $createHandle = function () use ($url, $method): \CurlHandle {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => false,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_HTTPHEADER => ['User-Agent: eidcloud-micro-benchmark/1.0.0'],
+        ]);
+        return $ch;
+    };
+
+    $startTime = microtime(true);
+
+    // Initial batch filling concurrency slots
+    while ($requestsDispatched < $totalRequests && count($activeHandles) < $concurrency) {
+        $ch = $createHandle();
+        curl_multi_add_handle($multiHandle, $ch);
+        $reqStart = hrtime(true);
+        $activeHandles[(int)$ch] = ['handle' => $ch, 'start' => $reqStart];
+        $requestsDispatched++;
+    }
+
+    do {
+        $status = curl_multi_exec($multiHandle, $running);
+
+        while ($info = curl_multi_info_read($multiHandle)) {
+            $ch = $info['handle'];
+            $chId = (int)$ch;
+
+            if (isset($activeHandles[$chId])) {
+                $elapsedMs = (hrtime(true) - $activeHandles[$chId]['start']) / 1e+6;
+                $latencies[] = $elapsedMs;
+
+                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $bytes = (int) curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD);
+                $totalBytes += $bytes;
+
+                $statusCodes[$code] = ($statusCodes[$code] ?? 0) + 1;
+
+                if ($code === 0 || $info['result'] !== CURLE_OK) {
+                    $errors++;
+                }
+
+                curl_multi_remove_handle($multiHandle, $ch);
+                curl_close($ch);
+                unset($activeHandles[$chId]);
+
+                // Spawn replacement request if more needed
+                if ($requestsDispatched < $totalRequests) {
+                    $newCh = $createHandle();
+                    curl_multi_add_handle($multiHandle, $newCh);
+                    $activeHandles[(int)$newCh] = ['handle' => $newCh, 'start' => hrtime(true)];
+                    $requestsDispatched++;
+                }
+            }
+        }
+
+        if ($running > 0) {
+            curl_multi_select($multiHandle, 0.05);
+        }
+    } while ($running > 0 || !empty($activeHandles));
+
+    curl_multi_close($multiHandle);
+
+    $totalTime = microtime(true) - $startTime;
+    $completed = count($latencies);
+    $successful = $completed - $errors;
+    $rps = $totalTime > 0 ? $completed / $totalTime : 0;
+
+    sort($latencies);
+    $minLatency = $latencies[0] ?? 0;
+    $maxLatency = $latencies[count($latencies) - 1] ?? 0;
+    $avgLatency = $completed > 0 ? array_sum($latencies) / $completed : 0;
+    $p50Index = (int) floor($completed * 0.50);
+    $p95Index = (int) floor($completed * 0.95);
+    $p99Index = (int) floor($completed * 0.99);
+
+    $p50 = $latencies[$p50Index] ?? 0;
+    $p95 = $latencies[$p95Index] ?? 0;
+    $p99 = $latencies[$p99Index] ?? 0;
+    $throughputKBs = $totalTime > 0 ? ($totalBytes / 1024) / $totalTime : 0;
+
+    echo bold("BENCHMARK RESULTS:") . "\n";
+    echo "  " . bold("Completed Requests : ") . green((string)$completed) . " / " . $totalRequests . "\n";
+    echo "  " . bold("Successful (HTTP)  : ") . ($errors === 0 ? green((string)$successful) : red((string)$successful)) . "\n";
+    echo "  " . bold("Failed / Errors    : ") . ($errors > 0 ? red((string)$errors) : green("0")) . "\n";
+    echo "  " . bold("Total Time Taken   : ") . sprintf("%.4f seconds", $totalTime) . "\n";
+    echo "  " . bold("Requests / Second  : ") . bold(green(sprintf("%.2f req/s", $rps))) . "\n";
+    echo "  " . bold("Data Throughput    : ") . sprintf("%.2f KB/s", $throughputKBs) . "\n\n";
+
+    echo bold("LATENCY DISTRIBUTION (ms):") . "\n";
+    echo sprintf("  Min    : %8.2f ms\n", $minLatency);
+    echo sprintf("  Avg    : %8.2f ms\n", $avgLatency);
+    echo sprintf("  Median : %8.2f ms\n", $p50);
+    echo sprintf("  95%%    : %8.2f ms\n", $p95);
+    echo sprintf("  99%%    : %8.2f ms\n", $p99);
+    echo sprintf("  Max    : %8.2f ms\n\n", $maxLatency);
+
+    echo bold("STATUS CODE BREAKDOWN:") . "\n";
+    foreach ($statusCodes as $sc => $count) {
+        $scFormatted = ($sc >= 200 && $sc < 300) ? green((string)$sc) : yellow((string)$sc);
+        echo "  [{$scFormatted}] : " . number_format($count) . " responses\n";
+    }
+    echo "\n";
+
+    return $errors === 0 ? 0 : 1;
+}
+
+// Execution dispatch
+$parsed = parseArgs($argv);
+
+switch ($parsed['command']) {
+    case 'serve':
+        exit(runServe($parsed['options']));
+    case 'benchmark':
+        exit(runBenchmark($parsed['options']));
+    case 'version':
+        echo "eidcloud-micro version " . VERSION . "\n";
+        exit(0);
+    case 'help':
+    default:
+        printHelp();
+        exit(0);
+}
